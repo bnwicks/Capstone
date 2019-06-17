@@ -1,0 +1,456 @@
+---
+title: "HarvardX: PH125.9x Data Science: Capstone Course \nChoose Your Own Project:
+  Analysising my Perfomance with Strava Data"
+author: "Byron Wicks"
+date: "16 June 2019"
+output:
+  word_document:
+    toc: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\newpage
+
+# Introduction
+
+The Choose You Own Project forms part of the HarvardX: PH125.9x Data Science: Capstone course. The aim of the project is to analyse and investigate data of your choosing and predict outcomes using machine learning.
+
+The author has chosen to analyse his personal fitness data from Strava recorded over almost 3 years containing bike rides, hikes, runs, and walks and to investigate any correlations in fitness, performance, and types of activities employed.
+
+This report will present an overview of the data, analysis, results and a conclusion.
+
+## Dataset
+
+An introductory review of the dataset is performed in order to familiarise ourselves. With some summarisation of the data for easier manipulation. Data is downloaded as per instruction from the Strava settings page.
+
+```{r, echo=TRUE, message=FALSE}
+
+# Libraries
+#####################################################
+
+library(tidyverse)
+library(gridExtra)
+library(strava)
+library(lubridate)
+library(gtools)
+library(sugrrants)
+library(DescTools)
+library(class)
+library(caret)
+
+load(file = "StravaData.Rdata")
+
+# Summarise data
+data_summary <- data %>%
+  mutate(time = lubridate::date(data$time),
+         year = strftime(data$time, format = "%Y"),
+         date_without_month = strftime(data$time, format = "%j"),
+         month = strftime(data$time, format = "%m"),
+         day_of_month = strftime(data$time, format = "%d"),
+         year_month = strftime(data$time, format = "%Y-%m"),
+         type = type) %>%
+  group_by(time, year, date_without_month, month, day_of_month, year_month) %>%
+  summarise(total_dist = sum(dist_to_prev), total_time = sum(time_diff_to_prev), type = type[1]) %>%
+  mutate(speed = (total_dist) / (total_time /60^2)) %>%
+  mutate(pace = (total_time / 60) / (total_dist)) %>%
+  ungroup %>%
+  mutate(id = as.numeric(row.names(.)))
+
+```
+
+### Data Summary
+The data_summary data set containing the formatted data. Each row is an activity and consists of the variables; "time", "year", "date_without_month", "month", "day_of_month", "year_month", "total_dist", "total_time", "type", "speed", "pace", and "id".
+
+```{r, echo=TRUE}
+# Summarise Data
+head(data_summary, 5)
+```
+
+Summarising the dataset reveals a well formatted set with no missing values. Dates are between 2016-06-16 and 2019-06-08 with 274 activities.
+
+```{r, echo=TRUE}
+summary(data_summary)
+```
+
+### Calendar
+
+A calendar of activities shows a rather irregular pattern of activities, though on average 1-2 activites each week. As the location of activity occured in both northern and southern hemispheres, estimation of the impact of sunlight hours, season, temperature and weather on the freqency of activity will further time to analyse. This will be investigated post assignment.
+
+```{r echo=TRUE, eval=TRUE}
+# Plot Calendar
+#####################################################
+
+# Generate plot data
+time_max <- today()
+
+daily_data <- data_summary %>%
+  group_by(time) %>%
+  mutate(dist = sum(total_dist), type = type[1]) %>%
+  ungroup() %>%
+  mutate(time = lubridate::date(time))
+
+daily_data <- daily_data %>%
+  group_by(type) %>%
+  mutate(max_distance = max(dist))
+
+daily_data <- daily_data %>%
+  group_by(time) %>%
+  mutate(scaled_distance = dist / max_distance)
+
+daily_data_cal <- daily_data %>%  
+  frame_calendar(x = time, y = 1, date = time, calendar = "monthly") %>%
+  transform(week = as.POSIXlt(time)$yday %/% 7 + 1,
+            wday = weekdays(as.POSIXlt(time)),
+            year = as.POSIXlt(time)$year + 1900)
+
+# Reverse days for graphing
+daily_data_cal$wday <- factor(daily_data_cal$wday, day.name[7:1])
+
+# Graph data
+p <- daily_data_cal %>% 
+  ggplot(aes(x = week, y = wday, fill = type, alpha=scaled_distance)) + 
+  geom_tile(size=1) +
+  scale_fill_manual(values=c(Ride="red", Run="blue", Walk="green", Hike="yellow")) +
+  ylab("Weekday") +
+  xlab("Month") +
+  theme(legend.position="right") +
+  scale_x_continuous(breaks = (c(0:11)*52/12), labels = month.abb) +
+  facet_wrap(~year, ncol = 1)
+p
+
+# Save plot
+ggsave(paste("calendar",Sys.Date(),".png"), p, width = 30, height = 30, units = "cm", dpi = 300)
+```
+
+
+### Plot Facets
+
+Maps were plotted for each activity, with distance, speed and time, allowing identification of routes that were attempted multiple times and the consistancy of the performance.
+
+```{r echo=TRUE, eval=TRUE}
+
+data_facets <- data %>%
+  group_by(id) %>%
+  summarise(lon_avg = mean(lon),
+            lat_avg = mean(lat),
+            time = max(elapsed_time),
+            distanceKm = max(distance/1000),
+            timePerKm = round((time) / (distanceKm)),
+            description = paste(type[1],"\n",as.Date(date[1]),"\n",round(distanceKm),"km\n", tolower(seconds_to_period(timePerKm)), "/ km"))
+
+p <- data %>% ggplot(aes(x = lon, y = lat, group = id, col = type)) +
+  geom_point() +
+  facet_wrap(~id, scales = "free") +
+  theme_void() +
+  ggtitle("Facets") +
+  theme(panel.spacing = unit(0, "lines"), 
+        strip.background = element_blank(), 
+        strip.text = element_blank(), 
+        plot.margin = unit(rep(1, 4), "cm"),
+        legend.position="right") +
+  geom_text(aes(lon_avg, lat_avg, label = description), data = data_facets, alpha = 0.25, size = 3, color = "black")
+p
+
+# Save plot
+ggsave(paste("facets",Sys.Date(),".png"), p, width = 50, height = 50, units = "cm")
+```
+
+
+\newpage
+
+# Analysis and Results
+
+Metrics for fitness, fatigue and form were developed using the information published by Chris Spada and Will Meyer. An impulse for each type of activity was created, using the available speed and distance information. Fitness, form and fatigue effects were also modelled. Note that HR was not incorporated in this metric and the intensity of the activity and the fitness of the author was assumed a constant.
+
+## Create Fitness Metrics
+
+### Impulse
+
+The following graph shows the estimated impulse for each activity. Results correlate strongly with the percieved effort.
+
+```{r, echo=TRUE}
+ 
+#####################################################
+
+# Fitness, Freshness and Form Graphs
+# Analyse and plot graph of fitness and freshness using Strava running and cycling data
+
+# Assumptions
+impulse_runningPerKm <- 13 # between ~10 - 15
+impulse_ridingPerKm <-  3.3 # between ~3 - 5
+
+# Fitness constants 
+#fitness = 1*impulse, -20% per week, ~2% per day, use ~3 months data
+fitness_constant <- 0.98
+impulse_to_fitness <- 0.02
+
+# Fatigue constants
+# fatigue = 5*impulse, -80% per week, ~15% per day, use ~3 months data
+fatigue_constant <- 0.85
+impulse_to_fatigue <- 0.125
+
+# Form
+# form = difference between fitness and fatigue
+
+# Calculate form, fitness and fatigue for each day
+df_raw <- read.csv(file = "./data/activities.csv") # read data
+
+#Specify Start and End dates
+start_date <- min(as.numeric(as.Date(df_raw$date)))
+end_date <- max(as.numeric(as.Date(df_raw$date)))
+
+df_raw <- df_raw %>%
+  filter(as.numeric(as.Date(date)) >= start_date)
+
+# Impulse
+df <- df_raw %>%
+  mutate(impulse = ifelse(type=="Ride", impulse_ridingPerKm * distance / 1000, impulse_runningPerKm * distance / 1000))
+
+plot <- df %>% 
+  ggplot(aes(x = as.Date(date), y = impulse, color = type)) +
+  geom_point()
+plot
+# Save plot
+ggsave(paste("Impulse_Date",Sys.Date(),".png"), plot, width = 50, height = 50, units = "cm")
+```
+
+### Form, Fitness and Fatigue
+
+The form, fitness and fatigue metrics were created by scaled exponential decay functions. An approximation of the function is shown below;
+
+$$ Y_{t} = \sum(a*e^{-\alpha t} + b*e^{-\beta t}) $$
+where $Y_t$ is the predicted fitness, form and freshness, $a$ and $b$ are the scaling constants and $\alpha$ and $\beta$ the exponential scaling constants.
+
+A historical timeline of form, fitness and fatigue metrics is plotted over the entire timeline, with the daily impulse that impact the metric plotted below.
+
+```{r, echo=TRUE}
+#Function - Fitness
+f_fitness <- function(i_date) {
+  df_temp <- df %>%
+    mutate(date = as.Date(date)) %>%
+    filter(as.numeric(date) - as.numeric(as.Date(i_date, origin = "1970-01-01")) <= 0) %>%
+    mutate(relative_impulse = 0) %>%
+    mutate(relative_impulse = impulse * impulse_to_fitness * fitness_constant^(as.numeric(as.Date(i_date, origin = "1970-01-01") - as.numeric(date))))
+  return(sum(df_temp$relative_impulse))
+}
+
+# Function - Fatigue
+f_fatigue <- function(i_date) {
+  df_temp <- df %>%
+    mutate(date = as.Date(date)) %>%
+    filter(as.numeric(date) - as.numeric(as.Date(i_date, origin = "1970-01-01")) <= 0) %>%
+    mutate(relative_impulse = 0) %>%
+    mutate(relative_impulse = impulse * impulse_to_fatigue * fatigue_constant^(as.numeric(as.Date(i_date, origin = "1970-01-01") - as.numeric(date))))
+  return(sum(df_temp$relative_impulse))
+}
+
+# Update df with Fitness, Fatigue, Form Metrics
+df <- df %>%
+  mutate(fitness = sapply(date, f_fitness)) %>%
+  mutate(fatigue = sapply(date, f_fatigue)) %>%
+  mutate(form = fitness - fatigue)
+
+# Function - Form, Fitness and Fatigue
+#####################################################
+
+df_fff <- data_frame("date" = start_date:end_date)
+
+df_fff <- df_fff %>%
+  mutate(fitness = sapply(date, f_fitness)) %>%
+  mutate(fatigue = sapply(date, f_fatigue)) %>%
+  mutate(form = fitness - fatigue)
+
+# Plot for fitness and fatigue data
+df_tidy <- df_fff %>% gather(type = fitness:form)
+
+plot_1 <- df_tidy %>% ggplot(aes(x = as.Date(date, origin = "1970-01-01"), y = value, col = key)) +
+  geom_line(size=1)
+
+plot_2 <- df %>% ggplot(aes(x = as.Date(date, origin = "1970-01-01"), y = impulse, fill=type)) +
+  geom_bar(stat = "identity")
+
+grid.arrange(plot_1, plot_2, ncol = 1)
+```
+
+A linear model is fitted to the data to assertain any broad correlations. Hike, Ride, Run and Walk, all trend slightly upward with fitness. Indicating that fitness and impact are weakly correlated.
+
+```{r, echo=TRUE}
+# Plot Type, Fitness Impulse, Linear approximation
+plot_2 <- df %>% ggplot(aes(x = fitness, y = impulse, color = type)) +
+  geom_point() +
+  geom_smooth(se = FALSE, method = "gam", formula = y ~ x, fullrange=TRUE)
+plot_2
+
+```
+
+For each type of activity, the distance, fitness,and impulse is plotted. An obvious correlation exists between distance and activity type, and no obvious correlation between impulse and fitness.
+
+```{r, echo=TRUE}
+# Plot Attributes against type
+plot_3 <- df %>% ggplot(aes(x = distance, y = type)) +
+  geom_point()
+
+plot_4 <- df %>% ggplot(aes(x = fitness, y = type)) +
+  geom_point()
+
+plot_5 <- df %>% ggplot(aes(x = impulse, y = type)) +
+  geom_point()
+
+grid.arrange(plot_3, plot_4, plot_5, ncol = 1)
+
+```
+
+\newpage
+
+# Create Fitness Machine Learning Models 
+
+Both K-Nearest-Neighbours (KNN) and Quadrature Discriminant Analysis (QDA) were performed on the dataset. Distance was the obvious paramter to train the machine learning algorithm, though fitness and impulse was also implemented.
+
+## Training and Test Sets
+
+```{r, echo=TRUE}
+#####################################################
+## 75% of the sample size
+smp_size <- floor(0.75 * nrow(df))
+smp_size
+
+## set the seed to make your partition reproducible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(df)), size = smp_size)
+
+df_train <- df[train_ind, ]
+df_test <- df[-train_ind, ]
+```
+
+## KNN
+
+### Distance
+
+KNN with distance was initally chosen to model the type of activity and achieved the highest accuracy as expected. 
+
+```{r, echo=TRUE}
+#####################################################
+
+train_knn <- train(type ~ distance, method = "knn", 
+                   data = df_train,
+                   tuneGrid = data.frame(k = c(1:20)*5))
+y_hat_knn <- predict(train_knn, df_test)
+y_hat_knn
+cm_knn <- confusionMatrix(data = y_hat_knn, reference = df_test$type)
+cm_knn$overall
+train_knn
+plot(train_knn)
+
+df_cm <- as.data.frame(cm_knn$table)
+
+df_cm %>% ggplot(aes(Prediction, Reference)) + 
+  geom_tile(aes(fill = Freq)) +
+  geom_text(aes(label = Freq))
+
+# Plot descision boundary
+lgrid <- expand.grid(distance=seq(0, 100000, by=100))
+knnPredGrid <- predict(train_knn, newdata=lgrid)
+
+knnPred <- cbind(lgrid, knnPredGrid)
+
+knnPred %>% ggplot(aes(x = distance, y = knnPredGrid)) +
+  geom_point()
+```
+
+### Fitness and Impulse
+
+KNN with fintness and impulse was chosen to model the type of activity and achieved the limited accuracy. 
+
+
+```{r, echo=TRUE}
+######################################################
+
+train_knn <- train(type ~ fitness + impulse, method = "knn", 
+                   data = df_train,
+                   tuneGrid = data.frame(k = c(1:20)*5))
+y_hat_knn <- predict(train_knn, df_test)
+y_hat_knn
+cm_knn <- confusionMatrix(data = y_hat_knn, reference = df_test$type)
+cm_knn$overall
+
+train_knn
+plot(train_knn)
+
+df_cm <- as.data.frame(cm_knn$table)
+
+df_cm %>% ggplot(aes(Prediction, Reference)) + 
+  geom_tile(aes(fill = Freq)) +
+  geom_text(aes(label = Freq))
+
+# Plot descision boundary
+lgrid <- expand.grid(fitness=seq(0, 50, by=1),
+                     impulse=seq(0, 250,by=1))
+knnPredGrid <- predict(train_knn, newdata=lgrid)
+
+knnPred <- cbind(lgrid, knnPredGrid)
+
+plot <- knnPred %>% ggplot(aes(x = fitness, y = impulse, color=knnPredGrid)) +
+  geom_point(size=5)
+plot
+```
+
+## QDA 
+
+### Distance
+
+A QDA machine learning model was used to estimate the type of activity with distance. The QDA algorithm performed similar to the KNN algorithm on the dataset.
+
+```{r, echo=TRUE, warning=FALSE}
+
+#####################################################
+
+train_qda <- train(type ~ distance, data = df_train)
+train_qda
+y_hat <- predict(train_qda, df_test)
+y_hat
+
+cm <- confusionMatrix(data = y_hat, reference = df_test$type)
+cm$overall
+
+df_cm <- as.data.frame(cm$table)
+
+df_cm %>% ggplot(aes(Prediction, Reference)) + 
+  geom_tile(aes(fill = Freq)) +
+  geom_text(aes(label = Freq))
+
+# Plot descision boundary
+lgrid <- expand.grid(distance=seq(0, 100000, by=10))
+qdaPredGrid <- predict(train_qda, newdata=lgrid)
+
+qdaPred <- cbind(lgrid, qdaPredGrid)
+
+p <- qdaPred %>% ggplot(aes(x = distance, y = qdaPredGrid)) +
+  geom_point()
+p
+```
+
+\newpage
+
+# Conclusion
+
+Strava data was investigated, metrics for fitness and freshness implemented and models created to predict my performance and type of activity. Distance was showns as the most reliable predictor for the type of activity, with limited collelation between fitness, fatigue and activity.
+
+Overall the author has learned a significant amout for the Harvard Data Science course and a lot of fun was had. Thank you!
+
+
+
+
+
+
+
+
+
